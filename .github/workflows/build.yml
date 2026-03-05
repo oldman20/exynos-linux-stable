@@ -28,14 +28,12 @@ jobs:
       - name: Phẫu thuật mã nguồn (Hard Fix)
         run: |
           # 1. Sửa lỗi "65536 out of range" trong spinlock.h
-          # Chuyển constraint từ "I" (số nguyên hẹp) sang "r" (thanh ghi chung) để Clang chấp nhận
           sed -i 's/: "I" (1 << TICKET_SHIFT)/: "r" (1 << TICKET_SHIFT)/g' arch/arm64/include/asm/spinlock.h
           
           # 2. Sửa lỗi "register 'sp' unsuitable"
-          # Vô hiệu hóa việc định nghĩa sp là biến toàn cục gây lỗi trên Clang
           sed -i 's/register unsigned long current_stack_pointer asm ("sp");/static inline unsigned long get_current_sp(void) { unsigned long sp; asm("mov %0, sp" : "=r"(sp)); return sp; }/g' arch/arm64/include/asm/thread_info.h
           
-          # 3. Sửa lỗi sdcardfs (như đã làm)
+          # 3. Fix Kconfig sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -58,7 +56,6 @@ jobs:
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          # Tắt triệt để các tính năng gây xung đột Clang
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
@@ -68,7 +65,6 @@ jobs:
       - name: Compile Kernel
         run: |
           CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
-          # Dùng bộ Binutils của Proton để đồng bộ tuyệt đối
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
@@ -81,11 +77,10 @@ jobs:
                 ANDROID_MAJOR_VERSION=10"
 
           make $args exynos9810-crownlte_defconfig
-          # Ép lờ đi các cảnh báo rác để tập trung vào lỗi thật
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -fno-integrated-as -Wno-asm-operand-widths -Wno-implicit-function-declaration"
 
       - name: Upload Artifact
-        uses: artifacts/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: Kernel-Note9-Final-Fix
           path: out/arch/arm64/boot/Image.gz-dtb
