@@ -1,4 +1,4 @@
-name: Build Note 9 Final Boss - Fixed Shell
+name: Build Note 9 Final Fix
 on:
   workflow_dispatch:
 
@@ -23,7 +23,7 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/tc-arm32
           curl -LSs https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/arm-linux-gnueabi/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz | tar -xJ -C $GITHUB_WORKSPACE/tc-arm32 --strip-components=1
 
-      - name: Phẫu thuật triệt để
+      - name: Phẫu thuật mã nguồn
         run: |
           # 1. Integrate KSU-Next
           rm -rf drivers/kernelsu
@@ -32,10 +32,10 @@ jobs:
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          # 2. Sửa lỗi DTC yylloc
+          # 2. Sửa lỗi DTC yylloc (Bắt buộc cho Ubuntu mới)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 3. Ghi đè Kconfig sdcardfs (Diệt lỗi 10/Kconfig)
+          # 3. Ghi đè Kconfig sdcardfs (Diệt lỗi logic 10/Kconfig)
           mkdir -p fs/sdcardfs
           echo 'config SDCARDFS_FS' > fs/sdcardfs/Kconfig
           echo '    tristate "SDCard filesystem support"' >> fs/sdcardfs/Kconfig
@@ -43,34 +43,35 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          # Đường dẫn tuyệt đối đến Compiler
-          TC64=$GITHUB_WORKSPACE/tc-arm64/bin/aarch64-linux-gnu-
-          TC32=$GITHUB_WORKSPACE/tc-arm32/bin/arm-linux-gnueabi-
+          # Thiết lập đường dẫn Toolchain
+          TC64="$GITHUB_WORKSPACE/tc-arm64/bin/aarch64-linux-gnu-"
+          TC32="$GITHUB_WORKSPACE/tc-arm32/bin/arm-linux-gnueabi-"
           
           mkdir -p out
           
-          # Khai báo môi trường với DẤU NGOẶC KÉP CẨN THẬN
+          # Định nghĩa các tham số build - KHÔNG DÙNG KÝ TỰ ĐẶC BIỆT
           export ARCH=arm64
           export ANDROID_MAJOR_VERSION=10
           export KBUILD_BUILD_USER="oldman"
-          export KBUILD_BUILD_HOST="RD-Center" # Bỏ dấu & để an toàn tuyệt đối
+          export KBUILD_BUILD_HOST="BuildServer"
           
-          # 1. Tạo config
-          make O=out CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 exynos9810-crownlte_defconfig
+          # 1. Khởi tạo Defconfig
+          make O=out CROSS_COMPILE="$TC64" CROSS_COMPILE_ARM32="$TC32" exynos9810-crownlte_defconfig
           
-          # 2. Ép cấu hình
+          # 2. Ép cấu hình: Tắt bảo mật gây lỗi ASM, bật KSU
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' out/.config
           sed -i 's/CONFIG_ARM64_LSE_ATOMICS=y/CONFIG_ARM64_LSE_ATOMICS=n/g' out/.config
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
           
-          # 3. Áp dụng config mới
-          make O=out CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 olddefconfig
+          # 3. Chấp nhận cấu hình mới (olddefconfig cực kỳ quan trọng)
+          make O=out CROSS_COMPILE="$TC64" CROSS_COMPILE_ARM32="$TC32" olddefconfig
           
-          # 4. Build chính thức (Sử dụng HOSTCFLAGS để sửa lỗi môi trường mới)
+          # 4. Biên dịch chính thức
+          # Thêm HOSTCFLAGS để tránh lỗi scripts trên Ubuntu 24.04
           make -j$(nproc --all) O=out \
-               CROSS_COMPILE=$TC64 \
-               CROSS_COMPILE_ARM32=$TC32 \
+               CROSS_COMPILE="$TC64" \
+               CROSS_COMPILE_ARM32="$TC32" \
                HOSTCFLAGS="-fcommon" \
                HOSTCXXFLAGS="-fcommon" \
                Image.gz-dtb
@@ -78,5 +79,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Final-Fixed-V2
+          name: Kernel-Note9-Final-Fixed
           path: out/arch/arm64/boot/Image.gz-dtb
