@@ -14,9 +14,10 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          rm -f clang-llvm/bin/ld clang-llvm/bin/ld.lld clang-llvm/bin/aarch64-linux-gnu-ld clang-llvm/bin/arm-linux-gnueabi-ld
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
+          # Tải NDK r23b - Bộ công cụ chuẩn nhất để build Kernel Android cũ
+          wget https://dl.google.com/android/repository/android-ndk-r23b-linux.zip
+          unzip -q android-ndk-r23b-linux.zip
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -26,9 +27,12 @@ jobs:
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Inject KSU Hooks & Fix Source Bug
+      - name: Phẫu thuật mã nguồn (Hard Fix)
         run: |
-          # 1. SỬA LỖI SDCARDFS
+          # Sửa lỗi Device Tree Compiler yylloc
+          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          
+          # Fix lỗi sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -37,17 +41,13 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
-          # 2. CHÈN HOOK KSU
+          # Inject KSU Hooks
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
-          
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
           sed -i '/int retval;/a \n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
-          
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
-          
-          echo "Da fix Kconfig va Inject Hook thành công!"
 
       - name: Configure Kernel
         run: |
@@ -55,6 +55,8 @@ jobs:
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
+          # Tắt Stack Protector để tránh xung đột Clang
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
@@ -62,31 +64,26 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
-          # Thêm HOSTCFLAGS="-fcommon" để sửa lỗi yylloc trên Ubuntu mới
+          NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r23b/toolchains/llvm/prebuilt/linux-x86_64/bin
+          CLANG=$NDK_PATH/clang
+          
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
-                CC=$CLANG_PATH/clang \
-                HOSTCC=gcc \
-                HOSTCXX=g++ \
+                CC=$CLANG \
+                CLANG_TRIPLE=aarch64-linux-android- \
                 CROSS_COMPILE=aarch64-linux-gnu- \
                 CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LD=aarch64-linux-gnu-ld \
-                AR=$CLANG_PATH/llvm-ar \
-                NM=$CLANG_PATH/llvm-nm \
-                OBJCOPY=$CLANG_PATH/llvm-objcopy \
-                OBJDUMP=$CLANG_PATH/llvm-objdump \
-                STRIP=$CLANG_PATH/llvm-strip \
-                ANDROID_MAJOR_VERSION=10 \
-                HOSTCFLAGS=-fcommon \
-                HOSTCXXFLAGS=-fcommon"
+                HOSTCFLAGS="-fcommon" \
+                HOSTCXXFLAGS="-fcommon" \
+                ANDROID_MAJOR_VERSION=10"
 
           make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
+          # Sử dụng KBUILD_CFLAGS nới lỏng để vượt qua các lỗi cú pháp Samsung
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable -Wno-unused-function"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Stock-KSU-${{ github.run_number }}
+          name: Kernel-Note9-NDK-KSU
           path: out/arch/arm64/boot/Image.gz-dtb
