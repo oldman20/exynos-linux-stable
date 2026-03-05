@@ -11,14 +11,15 @@ jobs:
         with:
           ref: stock
 
-      - name: Install Dependencies
+      - name: Install Modern Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses5
+          # Cài libncurses6 thay vì 5, và các công cụ build cơ bản
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses6 libncurses-dev
           
-      - name: Download Linaro GCC 4.9 (The Original Toolchain)
+      - name: Download Linaro GCC 4.9 (Legacy Power)
         run: |
-          # Tải GCC 4.9 - Trình biên dịch chuẩn cho Note 9
+          # Tải GCC 4.9 - Bộ này cực kỳ lỳ lợm, ít phụ thuộc hệ thống
           mkdir -p $GITHUB_WORKSPACE/gcc-linaro
           wget -q https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/aarch64-linux-gnu/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz
           tar -xJf gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz -C $GITHUB_WORKSPACE/gcc-linaro --strip-components=1
@@ -35,10 +36,11 @@ jobs:
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Phẫu thuật mã nguồn (Bắt buộc)
+      - name: Phẫu thuật mã nguồn (Compatibility Fix)
         run: |
-          # Sửa lỗi DTC yylloc
+          # Sửa lỗi DTC yylloc cho Ubuntu mới
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          
           # Fix Kconfig sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
@@ -50,24 +52,35 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          export CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-linaro/bin/aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc-arm32/bin/arm-linux-gnueabi-
+          # Thiết lập PATH để ưu tiên GCC 4.9
+          export PATH=$GITHUB_WORKSPACE/gcc-linaro/bin:$GITHUB_WORKSPACE/gcc-arm32/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export ARCH=arm64
           export ANDROID_MAJOR_VERSION=10
           
-          # Dùng BASH để chạy make, tránh lỗi Illegal Option
+          # Dùng BASH để chạy
           /bin/bash -c "
+            # Tạo out directory
+            mkdir -p out
+            
+            # Khởi tạo config
             make O=out exynos9810-crownlte_defconfig
             
-            # Tắt các thứ gây lỗi biên dịch
+            # ÉP TẮT các tính năng gây xung đột Toolchain hiện đại
             sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' out/.config
             sed -i 's/CONFIG_ARM64_LSE_ATOMICS=y/CONFIG_ARM64_LSE_ATOMICS=n/g' out/.config
             
+            # Cấu hình KSU
+            echo 'CONFIG_KSU=y' >> out/.config
+            echo 'CONFIG_KSU_MANUAL_HOOK=y' >> out/.config
+            
+            # Build chính thức
             make -j$(nproc --all) O=out HOSTCFLAGS='-fcommon' Image.gz-dtb
           "
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: artifacts/upload-artifact@v4
         with:
-          name: Kernel-Note9-Linaro-GCC49
+          name: Kernel-Note9-Linaro-Final
           path: out/arch/arm64/boot/Image.gz-dtb
