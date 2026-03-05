@@ -4,7 +4,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest  # Quay lại bản mới nhất để được cấp máy nhanh
+    runs-on: ubuntu-22.04 # Dùng 22.04 cho ổn định
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -14,8 +14,14 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev
+          # Cài đặt thêm bộ cross-compiler chuẩn của Ubuntu để lấy Linker sạch
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+          # BƯỚC QUAN TRỌNG: Xóa file ld của Proton Clang để nó không gây xung đột với hệ thống
+          rm -f clang-llvm/bin/ld
+          rm -f clang-llvm/bin/ld.lld
+          rm -f clang-llvm/bin/aarch64-linux-gnu-ld
+          rm -f clang-llvm/bin/arm-linux-gnueabi-ld
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -47,12 +53,27 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
-          # Chiến thuật mới: Dùng LD_PRELOAD hoặc ép LD để né lỗi libc của Proton Clang
-          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang HOSTCC=gcc HOSTCXX=g++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LD=aarch64-linux-gnu-ld"
+          # KHÔNG export PATH nữa để tránh làm bẩn môi trường máy chủ
+          CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
           
+          # Gọi đích danh Clang và dùng Linker hệ thống (GNU LD)
+          args="-j$(nproc --all) \
+                O=out \
+                ARCH=arm64 \
+                CC=$CLANG_PATH/clang \
+                HOSTCC=gcc \
+                HOSTCXX=g++ \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LD=aarch64-linux-gnu-ld \
+                AR=$CLANG_PATH/llvm-ar \
+                NM=$CLANG_PATH/llvm-nm \
+                OBJCOPY=$CLANG_PATH/llvm-objcopy \
+                OBJDUMP=$CLANG_PATH/llvm-objdump \
+                STRIP=$CLANG_PATH/llvm-strip"
+
           make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration"
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
