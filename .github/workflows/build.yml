@@ -1,0 +1,58 @@
+name: Build Pure Stock + KSU-Next
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v3
+        with:
+          ref: stock # Ép buộc sử dụng nhánh stock cho Android 10
+
+      - name: Install Toolchain & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+
+      - name: Purge Old Data & Integrate KSU-Next
+        run: |
+          rm -rf drivers/kernelsu
+          sed -i '/kernelsu/d' drivers/Makefile
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU -b next
+          cd KernelSU
+          echo "KSU_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          cd ..
+          cp -r KernelSU/kernel drivers/kernelsu
+          echo "obj-y += kernelsu/" >> drivers/Makefile
+
+      - name: Apply Manual Hook Patch
+        run: |
+          # Đảm bảo file ksu_manual_hook.patch đã có ở thư mục gốc của repo
+          git apply ksu_manual_hook.patch || { echo "Patch FAIL!"; exit 1; }
+
+      - name: Configure Kernel
+        run: |
+          DEFCONFIG=exynos9810-crownlte_defconfig
+          CONF_PATH=arch/arm64/configs/$DEFCONFIG
+          echo "CONFIG_KSU=y" >> $CONF_PATH
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
+          sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
+          sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
+          sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
+          sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' $CONF_PATH
+
+      - name: Compile Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
+          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          make $args exynos9810-crownlte_defconfig
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Kernel-Stock-KSU-Next
+          path: out/arch/arm64/boot/Image.gz-dtb
