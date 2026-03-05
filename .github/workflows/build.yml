@@ -4,7 +4,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04  # Ép dùng Ubuntu 20.04 để khớp với Proton Clang
+    runs-on: ubuntu-latest  # Quay lại bản mới nhất để được cấp máy nhanh
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -48,8 +48,8 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
-          # Sửa đổi quan trọng: Thêm HOSTCC=gcc và HOSTCXX=g++ để fix lỗi ld
-          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang HOSTCC=gcc HOSTCXX=g++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          # Chiến thuật mới: Dùng LD_PRELOAD hoặc ép LD để né lỗi libc của Proton Clang
+          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang HOSTCC=gcc HOSTCXX=g++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LD=aarch64-linux-gnu-ld"
           
           make $args exynos9810-crownlte_defconfig
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration"
