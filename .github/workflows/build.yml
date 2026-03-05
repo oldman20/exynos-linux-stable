@@ -9,7 +9,7 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v3
         with:
-          ref: stock # Bắt buộc phải là stock
+          ref: stock # Ép buộc sử dụng nhánh stock cho Android 10
 
       - name: Install Toolchain & Dependencies
         run: |
@@ -19,37 +19,26 @@ jobs:
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
-          # Dọn sạch dấu vết KSU cũ nếu có trong source
           rm -rf drivers/kernelsu
           sed -i '/kernelsu/d' drivers/Makefile
-          
-          # Tải KSU-Next mới nhất bằng đích danh repo của Dev gốc
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU -b next
-          
-          # Trích xuất Hash để ghi log
           cd KernelSU
-          KSU_VER=$(git rev-parse --short HEAD)
-          echo "KSU_HASH=$KSU_VER" >> $GITHUB_ENV
+          echo "KSU_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           cd ..
-          
-          # Liên kết lõi mới
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
       - name: Apply Manual Hook Patch
         run: |
-          git apply ksu_manual_hook.patch || { echo "Patch that bai! Kiem tra file .patch"; exit 1; }
+          # Đảm bảo file ksu_manual_hook.patch đã có ở thư mục gốc của repo
+          git apply ksu_manual_hook.patch || { echo "Patch FAIL!"; exit 1; }
 
-      - name: Configure Kernel (Security & Defconfig)
+      - name: Configure Kernel
         run: |
           DEFCONFIG=exynos9810-crownlte_defconfig
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
-          
-          # Bật KSU
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          
-          # Tắt Kprobes & Bảo mật Samsung (Căn bản của R&D Root)
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
@@ -59,12 +48,11 @@ jobs:
         run: |
           export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
           args="-j$(nproc --all) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
-          
           make $args exynos9810-crownlte_defconfig
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: Control-Sample-Note9-KSU-Next-${{ env.KSU_HASH }}
+          name: Kernel-Stock-KSU-Next
           path: out/arch/arm64/boot/Image.gz-dtb
