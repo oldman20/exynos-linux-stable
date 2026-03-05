@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: stock # Ép buộc sử dụng nhánh stock cho Android 10
 
@@ -52,7 +52,7 @@ jobs:
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Kernel-Stock-KSU-Next
           path: out/arch/arm64/boot/Image.gz-dtb
