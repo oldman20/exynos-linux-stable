@@ -4,7 +4,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # Dùng 22.04 cho ổn định
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -14,10 +14,8 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
-          # Cài đặt thêm bộ cross-compiler chuẩn của Ubuntu để lấy Linker sạch
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          # BƯỚC QUAN TRỌNG: Xóa file ld của Proton Clang để nó không gây xung đột với hệ thống
           rm -f clang-llvm/bin/ld
           rm -f clang-llvm/bin/ld.lld
           rm -f clang-llvm/bin/aarch64-linux-gnu-ld
@@ -31,14 +29,24 @@ jobs:
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Inject KernelSU-Next Hooks (Manual)
+      - name: Inject KernelSU-Next Hooks & Fix Logic Errors
         run: |
+          # 1. Sửa lỗi vòng lặp vô hạn Kconfig (Xóa dòng 7 gây lỗi Error 1)
+          sed -i '7d' fs/sdcardfs/Kconfig
+          
+          # 2. Chèn Hook vào fs/read_write.c
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
+          
+          # 3. Chèn Hook vào fs/exec.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
           sed -i '/int retval;/a \\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
+          
+          # 4. Chèn Hook vào fs/open.c
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
+          
+          echo "Da va loi Kconfig va Inject Hook thanh cong!"
 
       - name: Configure Kernel
         run: |
@@ -53,30 +61,11 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          # KHÔNG export PATH nữa để tránh làm bẩn môi trường máy chủ
           CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
           
-          # Gọi đích danh Clang và dùng Linker hệ thống (GNU LD)
+          #args bao gồm ANDROID_MAJOR_VERSION=10 và Linker chuẩn
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
                 CC=$CLANG_PATH/clang \
-                HOSTCC=gcc \
-                HOSTCXX=g++ \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LD=aarch64-linux-gnu-ld \
-                AR=$CLANG_PATH/llvm-ar \
-                NM=$CLANG_PATH/llvm-nm \
-                OBJCOPY=$CLANG_PATH/llvm-objcopy \
-                OBJDUMP=$CLANG_PATH/llvm-objdump \
-                STRIP=$CLANG_PATH/llvm-strip"
-
-          make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Note9-Stock-${{ github.run_number }}
-          path: out/arch/arm64/boot/Image.gz-dtb
+                HOST
