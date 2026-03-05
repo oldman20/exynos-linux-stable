@@ -1,22 +1,22 @@
-name: Build Note 9 GCC-Standard + KSU
+name: Build Note 9 Docker-GCC + KSU
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # Chuyển về Ubuntu 20.04 để có độ tương thích thư viện cao hơn
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest # Dùng bản mới nhất để có máy ngay lập tức
+    container:
+      image: ubuntu:20.04 # Chạy mọi thứ bên trong môi trường 20.04
     steps:
+      - name: Install Dependencies Inside Container
+        run: |
+          apt-get update
+          apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5 sudo
+          
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
           ref: stock
-
-      - name: Install GCC-10 & Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
-          # Không tải thêm Toolchain ngoài, dùng trực tiếp GCC 10 của Ubuntu 20.04
 
       - name: Integrate KernelSU-Next
         run: |
@@ -26,12 +26,12 @@ jobs:
           sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Phẫu thuật mã nguồn (Hard Fix)
+      - name: Phẫu thuật mã nguồn (GCC Optimizing)
         run: |
-          # 1. Sửa lỗi DTC yylloc (Bắt buộc cho mọi môi trường mới)
+          # Sửa lỗi DTC yylloc
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 2. Fix Kconfig sdcardfs
+          # Fix Kconfig sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -40,7 +40,7 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
-          # 3. Inject KSU Hooks
+          # Inject KSU Hooks
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
@@ -53,42 +53,24 @@ jobs:
           DEFCONFIG=exynos9810-crownlte_defconfig
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           
-          # Tắt LSE ATOMICS - Thủ phạm gây lỗi invalid operand
+          # Tắt LSE - Triệt tiêu lỗi spinlock.h
           echo "CONFIG_ARM64_LSE_ATOMICS=n" >> $CONF_PATH
-          
-          # Cấu hình KSU
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
           
-          # Tắt các module bảo mật Samsung kén GCC
+          # Hạ cấp bảo mật để GCC 10 chạy mượt
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_REGULAR=y/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
           sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' $CONF_PATH
 
-      - name: Compile Kernel (Pure GCC)
+      - name: Compile Kernel
         run: |
-          # Không dùng biến 'args' để tránh lỗi shell interpretation
-          make -j$(nproc --all) \
-               O=out \
-               ARCH=arm64 \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-               HOSTCFLAGS="-fcommon" \
-               HOSTCXXFLAGS="-fcommon" \
-               exynos9810-crownlte_defconfig
-
-          make -j$(nproc --all) \
-               O=out \
-               ARCH=arm64 \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-               HOSTCFLAGS="-fcommon" \
-               HOSTCXXFLAGS="-fcommon" \
-               Image.gz-dtb
+          make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" exynos9810-crownlte_defconfig
+          make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-GCC10-KSU
+          name: Kernel-Note9-Docker-GCC
           path: out/arch/arm64/boot/Image.gz-dtb
