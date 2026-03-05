@@ -1,4 +1,4 @@
-name: Build Note 9 Linaro Final-Fix
+name: Build Note 9 Final Boss
 on:
   workflow_dispatch:
 
@@ -14,66 +14,68 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses6 libncurses-dev libssl-dev
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses6 libncurses-dev
           
       - name: Setup Linaro GCC 4.9
         run: |
           mkdir -p $GITHUB_WORKSPACE/tc-arm64
           curl -LSs https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/aarch64-linux-gnu/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz | tar -xJ -C $GITHUB_WORKSPACE/tc-arm64 --strip-components=1
-          
           mkdir -p $GITHUB_WORKSPACE/tc-arm32
           curl -LSs https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/arm-linux-gnueabi/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz | tar -xJ -C $GITHUB_WORKSPACE/tc-arm32 --strip-components=1
 
-      - name: Phẫu thuật mã nguồn & KSU
+      - name: Phẫu thuật triệt để (No More Errors)
         run: |
-          # Integrate KSU-Next
+          # 1. Integrate KSU-Next
           rm -rf drivers/kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU
           cp -r KernelSU/kernel drivers/kernelsu
+          sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          # Sửa lỗi DTC yylloc (Bắt buộc)
+          # 2. Sửa lỗi DTC yylloc
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # Fix Kconfig sdcardfs
-          if [ ! -f fs/sdcardfs/Kconfig ]; then
-            mkdir -p fs/sdcardfs
-            echo "config SDCARDFS_FS" > fs/sdcardfs/Kconfig
-            echo "    tristate \"SDCard filesystem support\"" >> fs/sdcardfs/Kconfig
-          fi
+          # 3. GHI ĐÈ HOÀN TOÀN Kconfig sdcardfs (Sửa lỗi "can't open file 10/Kconfig")
+          # Chúng ta phá bỏ cái logic tìm thư mục '10' của Samsung
+          mkdir -p fs/sdcardfs
+          cat << 'EOF' > fs/sdcardfs/Kconfig
+          config SDCARDFS_FS
+          	tristate "SDCard filesystem support"
+          	default y
+          	help
+          	  Sdcardfs is a stackable wrap-around filesystem.
+          EOF
+          
+          # 4. Fix lỗi build scripts/mod/empty.o trên host mới
+          sed -i 's/-Wp,-MD,$(depfile) //g' scripts/Makefile.build || true
 
       - name: Compile Kernel
         run: |
-          # Khai báo đường dẫn tuyệt đối
           TC64=$GITHUB_WORKSPACE/tc-arm64/bin/aarch64-linux-gnu-
           TC32=$GITHUB_WORKSPACE/tc-arm32/bin/arm-linux-gnueabi-
           
-          # Tạo out directory
           mkdir -p out
           
-          # Lệnh make cực kỳ chi tiết - KHÔNG DÙNG BIẾN NGOÀI
-          make O=out ARCH=arm64 CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 ANDROID_MAJOR_VERSION=10 exynos9810-crownlte_defconfig
+          # Build tham số
+          args="O=out ARCH=arm64 CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 ANDROID_MAJOR_VERSION=10 HOSTCFLAGS=-fcommon"
           
-          # Tinh chỉnh config để tránh lỗi ASM và bảo mật
+          # Bước 1: Config
+          make $args exynos9810-crownlte_defconfig
+          
+          # Bước 2: Ép tắt bảo mật & Bật KSU
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' out/.config
           sed -i 's/CONFIG_ARM64_LSE_ATOMICS=y/CONFIG_ARM64_LSE_ATOMICS=n/g' out/.config
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
           
-          # Chấp nhận config mới
-          make O=out ARCH=arm64 CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 ANDROID_MAJOR_VERSION=10 olddefconfig
+          # Bước 3: Áp dụng config mà không hỏi
+          make $args olddefconfig
           
-          # Build - Thêm các flag khắc phục lỗi HOSTCC
-          make -j$(nproc --all) O=out ARCH=arm64 \
-               CROSS_COMPILE=$TC64 \
-               CROSS_COMPILE_ARM32=$TC32 \
-               ANDROID_MAJOR_VERSION=10 \
-               HOSTCFLAGS="-fcommon -I/usr/include" \
-               HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu" \
-               Image.gz-dtb
+          # Bước 4: Biên dịch
+          make -j$(nproc --all) $args Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Linaro-Standard
+          name: Kernel-Note9-Final-Fixed
           path: out/arch/arm64/boot/Image.gz-dtb
