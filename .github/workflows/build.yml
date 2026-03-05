@@ -14,9 +14,10 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          rm -f clang-llvm/bin/ld clang-llvm/bin/ld.lld clang-llvm/bin/aarch64-linux-gnu-ld clang-llvm/bin/arm-linux-gnueabi-ld
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
+          # Tải GCC 6.4 từ Linaro - Phiên bản "vàng" cho Kernel 4.9
+          wget https://releases.linaro.org/components/toolchain/binaries/6.4-2018.05/aarch64-linux-gnu/gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
+          tar -xf gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -28,7 +29,6 @@ jobs:
 
       - name: Inject KSU Hooks & Fix Source Bug
         run: |
-          # 1. SỬA LỖI SDCARDFS
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -37,7 +37,6 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
-          # 2. CHÈN HOOK KSU
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           
@@ -46,8 +45,6 @@ jobs:
           
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
-          
-          echo "Da fix Kconfig va Inject Hook thành công!"
 
       - name: Configure Kernel
         run: |
@@ -62,31 +59,20 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
-          # Thêm HOSTCFLAGS="-fcommon" để sửa lỗi yylloc trên Ubuntu mới
+          GCC_PATH=$GITHUB_WORKSPACE/gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu/bin
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
-                CC=$CLANG_PATH/clang \
-                HOSTCC=gcc \
-                HOSTCXX=g++ \
-                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE=$GCC_PATH/aarch64-linux-gnu- \
                 CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LD=aarch64-linux-gnu-ld \
-                AR=$CLANG_PATH/llvm-ar \
-                NM=$CLANG_PATH/llvm-nm \
-                OBJCOPY=$CLANG_PATH/llvm-objcopy \
-                OBJDUMP=$CLANG_PATH/llvm-objdump \
-                STRIP=$CLANG_PATH/llvm-strip \
-                ANDROID_MAJOR_VERSION=10 \
                 HOSTCFLAGS=-fcommon \
                 HOSTCXXFLAGS=-fcommon"
 
           make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
+          make $args Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Stock-KSU-${{ github.run_number }}
+          name: Kernel-Note9-GCC64-KSU-${{ github.run_number }}
           path: out/arch/arm64/boot/Image.gz-dtb
