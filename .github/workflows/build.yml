@@ -1,46 +1,37 @@
-name: Build Pure Stock + KSU-Next
+name: Build Note 9 GCC-Standard + KSU
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    # Chuyển về Ubuntu 20.04 để có độ tương thích thư viện cao hơn
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@@v4
         with:
           ref: stock
 
-      - name: Install Toolchain & Dependencies
+      - name: Install GCC-10 & Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
-          wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
-          unzip -q android-ndk-r21e-linux-x86_64.zip
+          # Không tải thêm Toolchain ngoài, dùng trực tiếp GCC 10 của Ubuntu 20.04
 
-      - name: Purge Old Data & Integrate KSU-Next
+      - name: Integrate KernelSU-Next
         run: |
           rm -rf drivers/kernelsu
-          sed -i '/kernelsu/d' drivers/Makefile
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU
           cp -r KernelSU/kernel drivers/kernelsu
+          sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Phẫu thuật mã nguồn (Hard Fix ASM)
+      - name: Phẫu thuật mã nguồn (Hard Fix)
         run: |
-          # 1. SỬA LỖI SPINLOCK (Lỗi invalid operand "I")
-          # Thay đổi constraint từ "I" sang "r" để Clang chấp nhận giá trị từ thanh ghi thay vì hằng số cứng
-          sed -i 's/: "I" (1 << TICKET_SHIFT)/: "r" (1 << TICKET_SHIFT)/g' arch/arm64/include/asm/spinlock.h
-          
-          # 2. SỬA LỖI SP REGISTER (Lỗi register 'sp' unsuitable)
-          # Chuyển đổi cách lấy Stack Pointer từ biến register sang hàm asm
-          sed -i 's/register unsigned long current_stack_pointer asm ("sp");/static inline unsigned long get_current_sp(void) { unsigned long sp; asm("mov %0, sp" : "=r"(sp)); return sp; }/g' arch/arm64/include/asm/thread_info.h
-          sed -i 's/current_stack_pointer/get_current_sp()/g' arch/arm64/kernel/traps.c || true
-
-          # 3. Sửa lỗi DTC (yylloc)
+          # 1. Sửa lỗi DTC yylloc (Bắt buộc cho mọi môi trường mới)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 4. Fix Kconfig sdcardfs
+          # 2. Fix Kconfig sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -49,7 +40,7 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
-          # 5. Inject KSU Hooks
+          # 3. Inject KSU Hooks
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
@@ -57,41 +48,47 @@ jobs:
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
 
-      - name: Configure Kernel
+      - name: Configure Kernel (Disable LSE)
         run: |
           DEFCONFIG=exynos9810-crownlte_defconfig
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
+          
+          # Tắt LSE ATOMICS - Thủ phạm gây lỗi invalid operand
+          echo "CONFIG_ARM64_LSE_ATOMICS=n" >> $CONF_PATH
+          
+          # Cấu hình KSU
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          # Tắt RKP và TIMA - Những thứ này cực kỳ kén trình biên dịch
-          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
-          sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
+          
+          # Tắt các module bảo mật Samsung kén GCC
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_REGULAR=y/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
           sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' $CONF_PATH
 
-      - name: Compile Kernel
+      - name: Compile Kernel (Pure GCC)
         run: |
-          NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r21e
-          CLANG_PATH=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
-          
-          args="-j$(nproc --all) \
-                O=out \
-                ARCH=arm64 \
-                CC=$CLANG_PATH/clang \
-                CLANG_TRIPLE=aarch64-linux-android- \
-                CROSS_COMPILE=$CLANG_PATH/aarch64-linux-android- \
-                CROSS_COMPILE_ARM32=$CLANG_PATH/arm-linux-androideabi- \
-                HOSTCFLAGS="-fcommon" \
-                HOSTCXXFLAGS="-fcommon" \
-                ANDROID_MAJOR_VERSION=10"
+          # Không dùng biến 'args' để tránh lỗi shell interpretation
+          make -j$(nproc --all) \
+               O=out \
+               ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               HOSTCFLAGS="-fcommon" \
+               HOSTCXXFLAGS="-fcommon" \
+               exynos9810-crownlte_defconfig
 
-          make $args exynos9810-crownlte_defconfig
-          # Sử dụng KBUILD_CFLAGS để dập tắt các cảnh báo gây lỗi
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -fno-integrated-as -Wno-asm-operand-widths -Wno-implicit-function-declaration -Wno-int-conversion"
+          make -j$(nproc --all) \
+               O=out \
+               ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               HOSTCFLAGS="-fcommon" \
+               HOSTCXXFLAGS="-fcommon" \
+               Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Final-Fix
+          name: Kernel-Note9-GCC10-KSU
           path: out/arch/arm64/boot/Image.gz-dtb
