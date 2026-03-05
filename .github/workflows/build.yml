@@ -16,7 +16,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          # Giữ lại toàn bộ toolchain của Proton để đảm bảo tính đồng nhất
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -26,9 +25,17 @@ jobs:
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Inject KSU Hooks & Fix Source Bug
+      - name: Phẫu thuật mã nguồn (Hard Fix)
         run: |
-          # Fix triệt để lỗi Kconfig sdcardfs
+          # 1. Sửa lỗi "65536 out of range" trong spinlock.h
+          # Chuyển constraint từ "I" (số nguyên hẹp) sang "r" (thanh ghi chung) để Clang chấp nhận
+          sed -i 's/: "I" (1 << TICKET_SHIFT)/: "r" (1 << TICKET_SHIFT)/g' arch/arm64/include/asm/spinlock.h
+          
+          # 2. Sửa lỗi "register 'sp' unsuitable"
+          # Vô hiệu hóa việc định nghĩa sp là biến toàn cục gây lỗi trên Clang
+          sed -i 's/register unsigned long current_stack_pointer asm ("sp");/static inline unsigned long get_current_sp(void) { unsigned long sp; asm("mov %0, sp" : "=r"(sp)); return sp; }/g' arch/arm64/include/asm/thread_info.h
+          
+          # 3. Sửa lỗi sdcardfs (như đã làm)
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -37,7 +44,7 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
-          # Inject Hooks
+          # 4. Inject KSU Hooks
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
@@ -51,7 +58,7 @@ jobs:
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          # Tắt Stack Protector để tránh lỗi Clang không hỗ trợ mức Strong của Samsung
+          # Tắt triệt để các tính năng gây xung đột Clang
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
@@ -61,9 +68,7 @@ jobs:
       - name: Compile Kernel
         run: |
           CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
-          # CHÌA KHÓA: Thêm các flag để ép Clang bỏ qua lỗi thanh ghi và lỗi cú pháp cũ
-          EXTRA_FLAGS="-Wno-error -fno-integrated-as -fcommon -Wno-implicit-function-declaration -Wno-int-conversion -Wno-asm-operand-widths"
-          
+          # Dùng bộ Binutils của Proton để đồng bộ tuyệt đối
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
@@ -71,10 +76,16 @@ jobs:
                 CLANG_TRIPLE=aarch64-linux-gnu- \
                 CROSS_COMPILE=$CLANG_PATH/aarch64-linux-gnu- \
                 CROSS_COMPILE_ARM32=$CLANG_PATH/arm-linux-gnueabi- \
-                HOSTCFLAGS=-fcommon \
-                HOSTCXXFLAGS=-fcommon \
+                HOSTCFLAGS="-fcommon" \
+                HOSTCXXFLAGS="-fcommon" \
                 ANDROID_MAJOR_VERSION=10"
 
           make $args exynos9810-crownlte_defconfig
-          # ÉP BIÊN DỊCH VỚI KBUILD_CFLAGS MỞ RỘNG
-          make $args Image.gz-dtb KBUILD_CFLAGS="$EXTRA_FLAGS"
+          # Ép lờ đi các cảnh báo rác để tập trung vào lỗi thật
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -fno-integrated-as -Wno-asm-operand-widths -Wno-implicit-function-declaration"
+
+      - name: Upload Artifact
+        uses: artifacts/upload-artifact@v4
+        with:
+          name: Kernel-Note9-Final-Fix
+          path: out/arch/arm64/boot/Image.gz-dtb
