@@ -28,7 +28,7 @@ jobs:
 
       - name: Inject KSU Hooks & Fix Source Bug
         run: |
-          # 1. SỬA LỖI SDCARDFS (Dùng khối ghi đè an toàn)
+          # 1. SỬA LỖI SDCARDFS
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -63,6 +63,7 @@ jobs:
       - name: Compile Kernel
         run: |
           CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
+          # Thêm HOSTCFLAGS="-fcommon" để sửa lỗi yylloc trên Ubuntu mới
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
@@ -77,7 +78,9 @@ jobs:
                 OBJCOPY=$CLANG_PATH/llvm-objcopy \
                 OBJDUMP=$CLANG_PATH/llvm-objdump \
                 STRIP=$CLANG_PATH/llvm-strip \
-                ANDROID_MAJOR_VERSION=10"
+                ANDROID_MAJOR_VERSION=10 \
+                HOSTCFLAGS=-fcommon \
+                HOSTCXXFLAGS=-fcommon"
 
           make $args exynos9810-crownlte_defconfig
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
