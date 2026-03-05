@@ -41,10 +41,21 @@ jobs:
           echo "obj-y += kernelsu/" >> drivers/Makefile
           echo "Da tich hop thanh cong KernelSU-Next tai commit: $KSU_VER"
 
-      - name: Apply Manual Hook Patch
+      - name: Inject KernelSU-Next Hooks (Manual)
         run: |
-          # Đảm bảo file ksu_manual_hook.patch đã có ở thư mục gốc của repo
-          git apply ksu_manual_hook.patch || { echo "Patch FAIL!"; exit 1; }
+          # 1. Chèn Hook vào fs/read_write.c
+          sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
+          sed -i '/ssize_t ret;/a \\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
+          
+          # 2. Chèn Hook vào fs/exec.c
+          sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
+          sed -i '/int retval;/a \\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
+          
+          # 3. Chèn Hook vào fs/open.c
+          sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
+          sed -i '/struct file \*f;/a \\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
+          
+          echo "Da tiem thuoc (Inject) thanh cong vao file he thong!"
 
       - name: Configure Kernel
         run: |
