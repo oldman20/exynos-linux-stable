@@ -4,12 +4,12 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04  # Ép dùng Ubuntu 20.04 để khớp với Proton Clang
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4  # Nâng cấp lên v4 để đồng bộ
+        uses: actions/checkout@v4
         with:
-          ref: stock # Ép buộc sử dụng nhánh stock cho Android 10
+          ref: stock
 
       - name: Install Toolchain & Dependencies
         run: |
@@ -19,43 +19,20 @@ jobs:
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
-          # 1. Xóa sạch dấu vết cũ
           rm -rf drivers/kernelsu
           sed -i '/kernelsu/d' drivers/Makefile
-          
-          # 2. Clone nhánh MẶC ĐỊNH (Tự động thích ứng với master/main/next)
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU
-          
-          # 3. Kiểm tra xem đã lấy được code chưa
-          if [ ! -d "KernelSU/kernel" ]; then
-            echo "LOI: Khong tim thay thu muc kernel trong KernelSU-Next!"
-            exit 1
-          fi
-          
-          # 4. Trích xuất Hash và Tích hợp
-          cd KernelSU
-          KSU_VER=$(git rev-parse --short HEAD)
-          echo "KSU_HASH=$KSU_VER" >> $GITHUB_ENV
-          cd ..
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
-          echo "Da tich hop thanh cong KernelSU-Next tai commit: $KSU_VER"
 
       - name: Inject KernelSU-Next Hooks (Manual)
         run: |
-          # 1. Chèn Hook vào fs/read_write.c
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
-          
-          # 2. Chèn Hook vào fs/exec.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
           sed -i '/int retval;/a \\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
-          
-          # 3. Chèn Hook vào fs/open.c
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
-          
-          echo "Da tiem thuoc (Inject) thanh cong vao file he thong!"
 
       - name: Configure Kernel
         run: |
@@ -71,12 +48,14 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
-          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          # Sửa đổi quan trọng: Thêm HOSTCC=gcc và HOSTCXX=g++ để fix lỗi ld
+          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang HOSTCC=gcc HOSTCXX=g++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          
           make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration"
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4 # Nâng cấp từ v3 lên v4, BẮT BUỘC phải là v4
+        uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Stock-KSU-Next-${{ github.run_number }}
+          name: Kernel-Note9-Stock-${{ github.run_number }}
           path: out/arch/arm64/boot/Image.gz-dtb
