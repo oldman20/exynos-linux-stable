@@ -19,23 +19,27 @@ jobs:
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
-          # 1. Xóa rác cũ
+          # 1. Xóa sạch dấu vết cũ
           rm -rf drivers/kernelsu
           sed -i '/kernelsu/d' drivers/Makefile
           
-          # 2. Clone nhánh MAIN (Bản ổn định nhất của KSU-Next hiện tại)
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU -b main
+          # 2. Clone nhánh MẶC ĐỊNH (Tự động thích ứng với master/main/next)
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU
           
-          # 3. Trích xuất Hash để kiểm soát phiên bản
+          # 3. Kiểm tra xem đã lấy được code chưa
+          if [ ! -d "KernelSU/kernel" ]; then
+            echo "LOI: Khong tim thay thu muc kernel trong KernelSU-Next!"
+            exit 1
+          fi
+          
+          # 4. Trích xuất Hash và Tích hợp
           cd KernelSU
           KSU_VER=$(git rev-parse --short HEAD)
           echo "KSU_HASH=$KSU_VER" >> $GITHUB_ENV
           cd ..
-          
-          # 4. Tích hợp vào Kernel
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
-          echo "Da tich hop KernelSU-Next phien ban: $KSU_VER"
+          echo "Da tich hop thanh cong KernelSU-Next tai commit: $KSU_VER"
 
       - name: Apply Manual Hook Patch
         run: |
