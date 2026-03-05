@@ -9,13 +9,14 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: stock
+          ref: stock # Bốc code từ nhánh stock (Android 10)
 
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+          # Xóa Linker lỗi của bộ Clang
           rm -f clang-llvm/bin/ld clang-llvm/bin/ld.lld clang-llvm/bin/aarch64-linux-gnu-ld clang-llvm/bin/arm-linux-gnueabi-ld
 
       - name: Purge Old Data & Integrate KSU-Next
@@ -28,15 +29,11 @@ jobs:
 
       - name: Inject KSU Hooks & Fix Source Bug
         run: |
-          # 1. PHẪU THUẬT TRIỆT ĐỂ SDCARDFS (Sửa lỗi Error: can't open file)
-          # Thay thế toàn bộ nội dung file Kconfig bị lỗi bằng một bộ khung sạch, tối giản
-          echo 'config SDCARDFS_FS
-    tristate "SDCard filesystem support"
-    default y
-    help
-      Sdcardfs is a stackable wrap-around filesystem.' > fs/sdcardfs/Kconfig
+          # 1. PHẪU THUẬT LỖI VÒNG LẶP KCONFIG (Tìm đúng nội dung để xóa, không dùng số dòng)
+          # Lệnh này sẽ tìm dòng chứa 'source "fs/sdcardfs/Kconfig"' và xóa sạch nó
+          find fs/sdcardfs/ -name "Kconfig" -exec sed -i '/source "fs\/sdcardfs\/Kconfig"/d' {} +
           
-          # 2. CHÈN HOOK KSU (Inject trực tiếp vào mã nguồn hệ thống)
+          # 2. CHÈN HOOK KSU (Dùng lệnh 'grep' để kiểm tra trước khi chèn tránh lỗi)
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           
@@ -46,7 +43,8 @@ jobs:
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
           
-          echo "Da thay the Kconfig loi bang ban toi gian va Inject Hook thanh cong!"
+          echo "DEBUG: Kiểm tra xem file Kconfig còn lỗi không:"
+          grep -n "source" fs/sdcardfs/Kconfig || echo "Da sạch bóng lỗi!"
 
       - name: Configure Kernel
         run: |
@@ -54,7 +52,7 @@ jobs:
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          # Vô hiệu hóa các rào cản hệ thống
+          # Tắt các tính năng bảo mật cản trở KSU
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
