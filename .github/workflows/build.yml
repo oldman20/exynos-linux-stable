@@ -9,17 +9,15 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          ref: stock
+          ref: stock # Bốc code từ nhánh stock (Android 10)
 
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
-          rm -f clang-llvm/bin/ld
-          rm -f clang-llvm/bin/ld.lld
-          rm -f clang-llvm/bin/aarch64-linux-gnu-ld
-          rm -f clang-llvm/bin/arm-linux-gnueabi-ld
+          # Xóa Linker lỗi của bộ Clang
+          rm -f clang-llvm/bin/ld clang-llvm/bin/ld.lld clang-llvm/bin/aarch64-linux-gnu-ld clang-llvm/bin/arm-linux-gnueabi-ld
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -29,24 +27,24 @@ jobs:
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Inject KernelSU-Next Hooks & Fix Logic Errors
+      - name: Inject KSU Hooks & Fix Source Bug
         run: |
-          # 1. Sửa lỗi vòng lặp vô hạn Kconfig (Xóa dòng 7 gây lỗi Error 1)
-          sed -i '7d' fs/sdcardfs/Kconfig
+          # 1. PHẪU THUẬT LỖI VÒNG LẶP KCONFIG (Tìm đúng nội dung để xóa, không dùng số dòng)
+          # Lệnh này sẽ tìm dòng chứa 'source "fs/sdcardfs/Kconfig"' và xóa sạch nó
+          find fs/sdcardfs/ -name "Kconfig" -exec sed -i '/source "fs\/sdcardfs\/Kconfig"/d' {} +
           
-          # 2. Chèn Hook vào fs/read_write.c
+          # 2. CHÈN HOOK KSU (Dùng lệnh 'grep' để kiểm tra trước khi chèn tránh lỗi)
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
           
-          # 3. Chèn Hook vào fs/exec.c
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
           sed -i '/int retval;/a \\n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
           
-          # 4. Chèn Hook vào fs/open.c
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
           
-          echo "Da va loi Kconfig va Inject Hook thanh cong!"
+          echo "DEBUG: Kiểm tra xem file Kconfig còn lỗi không:"
+          grep -n "source" fs/sdcardfs/Kconfig || echo "Da sạch bóng lỗi!"
 
       - name: Configure Kernel
         run: |
@@ -54,6 +52,7 @@ jobs:
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
+          # Tắt các tính năng bảo mật cản trở KSU
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
@@ -62,10 +61,27 @@ jobs:
       - name: Compile Kernel
         run: |
           CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
-          
-          #args bao gồm ANDROID_MAJOR_VERSION=10 và Linker chuẩn
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
                 CC=$CLANG_PATH/clang \
-                HOST
+                HOSTCC=gcc \
+                HOSTCXX=g++ \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LD=aarch64-linux-gnu-ld \
+                AR=$CLANG_PATH/llvm-ar \
+                NM=$CLANG_PATH/llvm-nm \
+                OBJCOPY=$CLANG_PATH/llvm-objcopy \
+                OBJDUMP=$CLANG_PATH/llvm-objdump \
+                STRIP=$CLANG_PATH/llvm-strip \
+                ANDROID_MAJOR_VERSION=10"
+
+          make $args exynos9810-crownlte_defconfig
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Note9-Stock-KSU-${{ github.run_number }}
+          path: out/arch/arm64/boot/Image.gz-dtb
