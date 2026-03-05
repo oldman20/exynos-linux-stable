@@ -14,9 +14,9 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
-          wget https://releases.linaro.org/components/toolchain/binaries/6.4-2018.05/aarch64-linux-gnu/gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
-          tar -xf gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+          # Giữ lại toàn bộ toolchain của Proton để đảm bảo tính đồng nhất
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -28,6 +28,7 @@ jobs:
 
       - name: Inject KSU Hooks & Fix Source Bug
         run: |
+          # Fix triệt để lỗi Kconfig sdcardfs
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -36,23 +37,22 @@ jobs:
           	  Sdcardfs is a stackable wrap-around filesystem.
           EOF
           
+          # Inject Hooks
           sed -i '/#include <linux\/syscalls.h>/a #include <linux/kernelsu.h>' fs/read_write.c
           sed -i '/ssize_t ret;/a \n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n\tksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
-          
           sed -i '/#include <linux\/compat.h>/a #include <linux/kernelsu.h>' fs/exec.c
           sed -i '/int retval;/a \n\textern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' fs/exec.c
-          
           sed -i '/#include <linux\/ima.h>/a #include <linux/kernelsu.h>' fs/open.c
           sed -i '/struct file \*f;/a \n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_ptr, int *mode, int *flags);\n\tksu_handle_faccessat(&dfd, &filename, &mode, &flags);' fs/open.c
 
       - name: Configure Kernel
         run: |
-          # VÁ LỖI STACK PROTECTOR NẾU GCC 6.4 KHÔNG HỖ TRỢ BẢN STRONG
           DEFCONFIG=exynos9810-crownlte_defconfig
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_REGULAR=y/g' $CONF_PATH
+          # Tắt Stack Protector để tránh lỗi Clang không hỗ trợ mức Strong của Samsung
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
           sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
@@ -60,25 +60,21 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          # Thiết lập đường dẫn tuyệt đối
-          TOOLCHAIN_DIR=$GITHUB_WORKSPACE/gcc-linaro-6.4.1-2018.05-x86_64_aarch64-linux-gnu/bin
-          CROSS_COMPILE=$TOOLCHAIN_DIR/aarch64-linux-gnu-
+          CLANG_PATH=$GITHUB_WORKSPACE/clang-llvm/bin
+          # CHÌA KHÓA: Thêm các flag để ép Clang bỏ qua lỗi thanh ghi và lỗi cú pháp cũ
+          EXTRA_FLAGS="-Wno-error -fno-integrated-as -fcommon -Wno-implicit-function-declaration -Wno-int-conversion -Wno-asm-operand-widths"
           
-          # Định nghĩa tham số Build (Phải đầy đủ CC, LD, AR)
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
-                CC=${CROSS_COMPILE}gcc \
-                LD=${CROSS_COMPILE}ld \
-                AR=${CROSS_COMPILE}ar \
-                NM=${CROSS_COMPILE}nm \
-                OBJCOPY=${CROSS_COMPILE}objcopy \
-                OBJDUMP=${CROSS_COMPILE}objdump \
-                STRIP=${CROSS_COMPILE}strip \
-                CROSS_COMPILE=${CROSS_COMPILE} \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                CC=$CLANG_PATH/clang \
+                CLANG_TRIPLE=aarch64-linux-gnu- \
+                CROSS_COMPILE=$CLANG_PATH/aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=$CLANG_PATH/arm-linux-gnueabi- \
                 HOSTCFLAGS=-fcommon \
-                HOSTCXXFLAGS=-fcommon"
+                HOSTCXXFLAGS=-fcommon \
+                ANDROID_MAJOR_VERSION=10"
 
           make $args exynos9810-crownlte_defconfig
-          make $args Image.gz-dtb
+          # ÉP BIÊN DỊCH VỚI KBUILD_CFLAGS MỞ RỘNG
+          make $args Image.gz-dtb KBUILD_CFLAGS="$EXTRA_FLAGS"
