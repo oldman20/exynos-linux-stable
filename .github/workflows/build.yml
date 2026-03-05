@@ -1,4 +1,4 @@
-name: Build Note 9 Linaro GCC 4.9 + KSU
+name: Build Note 9 Linaro Final-Fix
 on:
   workflow_dispatch:
 
@@ -14,67 +14,66 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses6 libncurses-dev
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev libncurses6 libncurses-dev libssl-dev
           
-      - name: Download Linaro GCC 4.9
+      - name: Setup Linaro GCC 4.9
         run: |
-          mkdir -p $GITHUB_WORKSPACE/gcc-linaro
-          wget -q https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/aarch64-linux-gnu/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz
-          tar -xJf gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz -C $GITHUB_WORKSPACE/gcc-linaro --strip-components=1
+          mkdir -p $GITHUB_WORKSPACE/tc-arm64
+          curl -LSs https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/aarch64-linux-gnu/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu.tar.xz | tar -xJ -C $GITHUB_WORKSPACE/tc-arm64 --strip-components=1
           
-          mkdir -p $GITHUB_WORKSPACE/gcc-arm32
-          wget -q https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/arm-linux-gnueabi/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz
-          tar -xJf gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz -C $GITHUB_WORKSPACE/gcc-arm32 --strip-components=1
+          mkdir -p $GITHUB_WORKSPACE/tc-arm32
+          curl -LSs https://releases.linaro.org/components/toolchain/binaries/4.9-2017.01/arm-linux-gnueabi/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabi.tar.xz | tar -xJ -C $GITHUB_WORKSPACE/tc-arm32 --strip-components=1
 
       - name: Phẫu thuật mã nguồn & KSU
         run: |
-          # Integrate KSU
+          # Integrate KSU-Next
           rm -rf drivers/kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU
           cp -r KernelSU/kernel drivers/kernelsu
-          sed -i '/kernelsu/d' drivers/Makefile
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          # Fix DTC yylloc
+          # Sửa lỗi DTC yylloc (Bắt buộc)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
           # Fix Kconfig sdcardfs
-          cat << 'EOF' > fs/sdcardfs/Kconfig
-          config SDCARDFS_FS
-          	tristate "SDCard filesystem support"
-          	default y
-          EOF
+          if [ ! -f fs/sdcardfs/Kconfig ]; then
+            mkdir -p fs/sdcardfs
+            echo "config SDCARDFS_FS" > fs/sdcardfs/Kconfig
+            echo "    tristate \"SDCard filesystem support\"" >> fs/sdcardfs/Kconfig
+          fi
 
       - name: Compile Kernel
         run: |
-          # Thiết lập môi trường cực kỳ nghiêm ngặt
-          export TOOLCHAIN=$GITHUB_WORKSPACE/gcc-linaro/bin/aarch64-linux-gnu-
-          export TOOLCHAIN_ARM32=$GITHUB_WORKSPACE/gcc-arm32/bin/arm-linux-gnueabi-
+          # Khai báo đường dẫn tuyệt đối
+          TC64=$GITHUB_WORKSPACE/tc-arm64/bin/aarch64-linux-gnu-
+          TC32=$GITHUB_WORKSPACE/tc-arm32/bin/arm-linux-gnueabi-
           
-          # ÉP BUỘC toàn bộ hệ thống dùng BASH thay vì SH để tránh lỗi "Illegal Option"
-          sudo ln -sf /bin/bash /bin/sh
-          
+          # Tạo out directory
           mkdir -p out
           
-          # Bước 1: Tạo config mặc định
-          make O=out ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN CROSS_COMPILE_ARM32=$TOOLCHAIN_ARM32 ANDROID_MAJOR_VERSION=10 exynos9810-crownlte_defconfig
+          # Lệnh make cực kỳ chi tiết - KHÔNG DÙNG BIẾN NGOÀI
+          make O=out ARCH=arm64 CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 ANDROID_MAJOR_VERSION=10 exynos9810-crownlte_defconfig
           
-          # Bước 2: Chèn cấu hình bằng Script (Tránh dùng sed thủ công gây lỗi oldconfig)
-          scripts/config --file out/.config \
-            --disable CC_STACKPROTECTOR_STRONG \
-            --enable CC_STACKPROTECTOR_NONE \
-            --disable ARM64_LSE_ATOMICS \
-            --enable KSU \
-            --enable KSU_MANUAL_HOOK
-            
-          # Bước 3: Ép chấp nhận cấu hình mới mà không hỏi (Sửa lỗi "aborted" của ông)
-          make O=out ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN CROSS_COMPILE_ARM32=$TOOLCHAIN_ARM32 ANDROID_MAJOR_VERSION=10 olddefconfig
+          # Tinh chỉnh config để tránh lỗi ASM và bảo mật
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' out/.config
+          sed -i 's/CONFIG_ARM64_LSE_ATOMICS=y/CONFIG_ARM64_LSE_ATOMICS=n/g' out/.config
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
           
-          # Bước 4: Build chính thức
-          make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN CROSS_COMPILE_ARM32=$TOOLCHAIN_ARM32 ANDROID_MAJOR_VERSION=10 HOSTCFLAGS="-fcommon" Image.gz-dtb
+          # Chấp nhận config mới
+          make O=out ARCH=arm64 CROSS_COMPILE=$TC64 CROSS_COMPILE_ARM32=$TC32 ANDROID_MAJOR_VERSION=10 olddefconfig
+          
+          # Build - Thêm các flag khắc phục lỗi HOSTCC
+          make -j$(nproc --all) O=out ARCH=arm64 \
+               CROSS_COMPILE=$TC64 \
+               CROSS_COMPILE_ARM32=$TC32 \
+               ANDROID_MAJOR_VERSION=10 \
+               HOSTCFLAGS="-fcommon -I/usr/include" \
+               HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu" \
+               Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-Final-Result
+          name: Kernel-Note9-Linaro-Standard
           path: out/arch/arm64/boot/Image.gz-dtb
