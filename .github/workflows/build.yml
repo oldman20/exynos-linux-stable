@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # Nâng cấp lên v4 để đồng bộ
         with:
           ref: stock # Ép buộc sử dụng nhánh stock cho Android 10
 
@@ -52,7 +52,7 @@ jobs:
           make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 # Nâng cấp từ v3 lên v4, BẮT BUỘC phải là v4
         with:
-          name: Kernel-Stock-KSU-Next
+          name: Kernel-Stock-KSU-Next-${{ github.run_number }}
           path: out/arch/arm64/boot/Image.gz-dtb
