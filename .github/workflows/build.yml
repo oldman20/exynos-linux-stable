@@ -1,0 +1,70 @@
+name: Build Pure Stock + KSU-Next
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v3
+        with:
+          ref: stock # Bắt buộc phải là stock
+
+      - name: Install Toolchain & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang-llvm
+
+      - name: Purge Old Data & Integrate KSU-Next
+        run: |
+          # Dọn sạch dấu vết KSU cũ nếu có trong source
+          rm -rf drivers/kernelsu
+          sed -i '/kernelsu/d' drivers/Makefile
+          
+          # Tải KSU-Next mới nhất bằng đích danh repo của Dev gốc
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next KernelSU -b next
+          
+          # Trích xuất Hash để ghi log
+          cd KernelSU
+          KSU_VER=$(git rev-parse --short HEAD)
+          echo "KSU_HASH=$KSU_VER" >> $GITHUB_ENV
+          cd ..
+          
+          # Liên kết lõi mới
+          cp -r KernelSU/kernel drivers/kernelsu
+          echo "obj-y += kernelsu/" >> drivers/Makefile
+
+      - name: Apply Manual Hook Patch
+        run: |
+          git apply ksu_manual_hook.patch || { echo "Patch that bai! Kiem tra file .patch"; exit 1; }
+
+      - name: Configure Kernel (Security & Defconfig)
+        run: |
+          DEFCONFIG=exynos9810-crownlte_defconfig
+          CONF_PATH=arch/arm64/configs/$DEFCONFIG
+          
+          # Bật KSU
+          echo "CONFIG_KSU=y" >> $CONF_PATH
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
+          
+          # Tắt Kprobes & Bảo mật Samsung (Căn bản của R&D Root)
+          sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
+          sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
+          sed -i 's/CONFIG_TIMA=y/CONFIG_TIMA=n/g' $CONF_PATH
+          sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' $CONF_PATH
+
+      - name: Compile Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang-llvm/bin:$PATH
+          args="-j$(nproc --all) O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          
+          make $args exynos9810-crownlte_defconfig
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Control-Sample-Note9-KSU-Next-${{ env.KSU_HASH }}
+          path: out/arch/arm64/boot/Image.gz-dtb
