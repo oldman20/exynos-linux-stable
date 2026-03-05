@@ -15,9 +15,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc zip curl git libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libncurses5
-          # Tải NDK r23b - Bộ công cụ chuẩn nhất để build Kernel Android cũ
-          wget https://dl.google.com/android/repository/android-ndk-r23b-linux.zip
-          unzip -q android-ndk-r23b-linux.zip
+          # Tải NDK r21e - Phiên bản chuẩn cho Kernel 4.9 Android Q/R
+          wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+          unzip -q android-ndk-r21e-linux-x86_64.zip
 
       - name: Purge Old Data & Integrate KSU-Next
         run: |
@@ -27,12 +27,12 @@ jobs:
           cp -r KernelSU/kernel drivers/kernelsu
           echo "obj-y += kernelsu/" >> drivers/Makefile
 
-      - name: Phẫu thuật mã nguồn (Hard Fix)
+      - name: Phẫu thuật mã nguồn (Khắc phục xung đột hệ thống)
         run: |
-          # Sửa lỗi Device Tree Compiler yylloc
+          # Sửa lỗi DTC yylloc (bắt buộc cho Ubuntu 22.04+)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # Fix lỗi sdcardfs
+          # Fix lỗi sdcardfs Kconfig
           cat << 'EOF' > fs/sdcardfs/Kconfig
           config SDCARDFS_FS
           	tristate "SDCard filesystem support"
@@ -53,9 +53,10 @@ jobs:
         run: |
           DEFCONFIG=exynos9810-crownlte_defconfig
           CONF_PATH=arch/arm64/configs/$DEFCONFIG
+          # Thiết lập cấu hình KSU
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONF_PATH
-          # Tắt Stack Protector để tránh xung đột Clang
+          # Vô hiệu hóa bảo mật phần cứng Samsung gây xung đột biên dịch
           sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' $CONF_PATH
           sed -i 's/CONFIG_KPROBES=y/# CONFIG_KPROBES is not set/g' $CONF_PATH
           sed -i 's/CONFIG_UH_RKP=y/CONFIG_UH_RKP=n/g' $CONF_PATH
@@ -64,26 +65,31 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r23b/toolchains/llvm/prebuilt/linux-x86_64/bin
-          CLANG=$NDK_PATH/clang
+          # Thiết lập đường dẫn Toolchain NDK
+          NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r21e
+          CLANG_PATH=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
           
+          # Định nghĩa tham số build
+          # Sử dụng CROSS_COMPILE của NDK để đảm bảo tính đồng nhất
           args="-j$(nproc --all) \
                 O=out \
                 ARCH=arm64 \
-                CC=$CLANG \
+                CC=$CLANG_PATH/clang \
                 CLANG_TRIPLE=aarch64-linux-android- \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                CROSS_COMPILE=$CLANG_PATH/aarch64-linux-android- \
+                CROSS_COMPILE_ARM32=$CLANG_PATH/arm-linux-androideabi- \
                 HOSTCFLAGS="-fcommon" \
                 HOSTCXXFLAGS="-fcommon" \
                 ANDROID_MAJOR_VERSION=10"
 
+          # Chạy cấu hình
           make $args exynos9810-crownlte_defconfig
-          # Sử dụng KBUILD_CFLAGS nới lỏng để vượt qua các lỗi cú pháp Samsung
-          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable -Wno-unused-function"
+          
+          # Biên dịch chính thức - Nới lỏng kiểm tra để vượt qua code cũ Samsung
+          make $args Image.gz-dtb KBUILD_CFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Note9-NDK-KSU
+          name: Kernel-Note9-NDK-r21e-KSU
           path: out/arch/arm64/boot/Image.gz-dtb
