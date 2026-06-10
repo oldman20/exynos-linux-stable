@@ -12,3 +12,5 @@ https://github.com/xxmustafacooTR/KernelManager
 https://github.com/TechNoobForSale/Benchmarking-For-Dummies
 
 https://github.com/duhansysl/Bluetooth-Library-Patcher
+
+https://github.com/kerneltoast/simple_lmk
