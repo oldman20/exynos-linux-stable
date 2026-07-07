@@ -16,3 +16,7 @@ https://github.com/duhansysl/Bluetooth-Library-Patcher
 https://github.com/kerneltoast/simple_lmk
 
 https://github.com/samsungexynos9810/hardware_samsung_slsi
+
+https://github.com/VDavid003/exynos-usbdl
+
+https://github.com/halal-beef/houston-pub
