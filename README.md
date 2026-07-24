@@ -20,3 +20,5 @@ https://github.com/samsungexynos9810/hardware_samsung_slsi
 https://github.com/VDavid003/exynos-usbdl
 
 https://github.com/halal-beef/houston-pub
+
+https://github.com/xxPlayground/android_kernel_samsung_exynos9810
