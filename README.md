@@ -22,3 +22,5 @@ https://github.com/VDavid003/exynos-usbdl
 https://github.com/halal-beef/houston-pub
 
 https://github.com/xxPlayground/android_kernel_samsung_exynos9810
+
+https://github.com/friendlycatt/exynos9810-kernel
