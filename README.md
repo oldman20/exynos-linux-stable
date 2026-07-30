@@ -1,4 +1,4 @@
-[https://github.com/wonderful-mobile/exynos-linux-stable
+https://github.com/wonderful-mobile/exynos-linux-stable
 
 https://gist.github.com/P1N2O/b9b2604c58aa4d7486e2fc0d327d23dc
 
@@ -73,4 +73,3 @@ https://github.com/halal-beef/houston-pub
 https://github.com/xxPlayground/android_kernel_samsung_exynos9810
 
 https://github.com/friendlycatt/exynos9810-kernel
-)
