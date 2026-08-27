@@ -75,3 +75,5 @@ https://github.com/xxPlayground/android_kernel_samsung_exynos9810
 https://github.com/friendlycatt/exynos9810-kernel
 
 https://github.com/Project-Silicium/Guides
+
+https://github.com/xxPlayground/android-mainline-exynos9810
